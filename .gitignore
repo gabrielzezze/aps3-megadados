@@ -1,3 +1,11 @@
+# Secrets
+**/.env
+**/db_admin_secrets.json
+**/db_app_secrets.json
+
+# macOS
+**/.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
