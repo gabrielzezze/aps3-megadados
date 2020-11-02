@@ -10,7 +10,7 @@ from fastapi import Depends
 
 from utils.utils import get_config_filename, get_app_secrets_filename
 
-from .models import Task
+from .models import Task, User
 
 
 class DBSession:
@@ -18,7 +18,7 @@ class DBSession:
         self.connection = connection
 
     def read_tasks(self, completed: bool = None):
-        query = 'SELECT BIN_TO_UUID(uuid), description, completed FROM tasks'
+        query = 'SELECT BIN_TO_UUID(uuid), description, completed, BIN_TO_UUID(user_id) FROM tasks'
         if completed is not None:
             query += ' WHERE completed = '
             if completed:
@@ -34,8 +34,9 @@ class DBSession:
             uuid_: Task(
                 description=field_description,
                 completed=bool(field_completed),
+                user_id=str(field_user_id)
             )
-            for uuid_, field_description, field_completed in db_results
+            for uuid_, field_description, field_completed, field_user_id in db_results
         }
 
     def create_task(self, item: Task):
@@ -43,8 +44,8 @@ class DBSession:
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                'INSERT INTO tasks VALUES (UUID_TO_BIN(%s), %s, %s)',
-                (str(uuid_), item.description, item.completed),
+                'INSERT INTO tasks VALUES (UUID_TO_BIN(%s), %s, %s, UUID_TO_BIN(%s))',
+                (str(uuid_), item.description, item.completed, str(item.user_id)),
             )
         self.connection.commit()
 
@@ -54,10 +55,10 @@ class DBSession:
         if not self.__task_exists(uuid_):
             raise KeyError()
 
-        with self.connection.cursor() as cursor:
+        with self.connection.cursor(buffered=True) as cursor:
             cursor.execute(
                 '''
-                SELECT description, completed
+                SELECT description, completed, BIN_TO_UUID(user_id)
                 FROM tasks
                 WHERE uuid = UUID_TO_BIN(%s)
                 ''',
@@ -65,7 +66,7 @@ class DBSession:
             )
             result = cursor.fetchone()
 
-        return Task(description=result[0], completed=bool(result[1]))
+        return Task(description=result[0], completed=bool(result[1]), user_id=str(result[2]))
 
     def replace_task(self, uuid_, item):
         if not self.__task_exists(uuid_):
@@ -74,10 +75,10 @@ class DBSession:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 '''
-                UPDATE tasks SET description=%s, completed=%s
+                UPDATE tasks SET description=%s, completed=%s, user_id=UUID_TO_BIN(%s)
                 WHERE uuid=UUID_TO_BIN(%s)
                 ''',
-                (item.description, item.completed, str(uuid_)),
+                (item.description, item.completed, str(item.user_id), str(uuid_)),
             )
         self.connection.commit()
 
@@ -110,6 +111,87 @@ class DBSession:
             results = cursor.fetchone()
             found = bool(results[0])
 
+        return found
+
+    # User functions
+    def create_user(self, new_user: User):
+        uuid_ = uuid.uuid4()
+
+        with self.connection.cursor() as cur:
+            cur.execute(
+                '''
+                INSERT INTO 
+                    users(uuid, username, first_name, last_name) 
+                    VALUES(UUID_TO_BIN(%s), %s, %s, %s)
+                ''',
+                (str(uuid_), new_user.username, new_user.first_name, new_user.last_name)
+            )
+        self.connection.commit()
+        return uuid_
+    
+    def fetch_user(self, uuid_: uuid.UUID):
+        if not self.__user_exists(uuid_):
+            raise KeyError()
+        
+        with self.connection.cursor() as cur:
+            cur.execute(
+                '''
+                    SELECT 
+                        username, first_name, last_name
+                    FROM users
+                    WHERE
+                        uuid = UUID_TO_BIN(%s)
+                ''',
+                (str(uuid_), ),
+            )
+            result = cur.fetchone()
+        return User(username=str(result[0]), first_name=str(result[1]), last_name=str(result[2]))
+
+    def replace_user(self, uuid_, updated_user: User):
+        if not self.__user_exists(uuid_):
+            raise KeyError()
+        
+        with self.connection.cursor() as cur:
+            cur.execute(
+                '''
+                    UPDATE users 
+                    SET username=%s, first_name=%s, last_name=%s
+                    WHERE uuid=UUID_TO_BIN(%s)
+                ''',
+                (updated_user.username, updated_user.first_name, updated_user.last_name, str(uuid_))
+            )
+        self.connection.commit()
+
+    def remove_user(self, uuid_: uuid.UUID):
+        if not self.__user_exists(uuid_):
+            raise KeyError()
+            
+        with self.connection.cursor() as cur:
+            cur.execute(
+                '''
+                DELETE FROM
+                    users
+                WHERE
+                    uuid=UUID_TO_BIN(%s)
+                ''',
+                (str(uuid_), ),
+            )
+            
+        self.connection.commit()
+
+    def __user_exists(self, uuid_: uuid.UUID):
+        with self.connection.cursor() as cur:
+            cur.execute(
+                '''
+                    SELECT 
+                        EXISTS(
+                            SELECT 1 FROM users WHERE uuid=UUID_TO_BIN(%s)
+                        )
+                ''',
+                (str(uuid_), ),
+            )
+            results = cur.fetchone()
+            found = bool(results[0])
         return found
 
 
